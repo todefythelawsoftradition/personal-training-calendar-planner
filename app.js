@@ -1,9 +1,15 @@
 (() => {
   "use strict";
 
-  const TODAY = 46;
   const CYCLE_DAYS = 84;
   const BASE_DATE = new Date(2026, 7, 17);
+  function offsetForDate(date) {
+    const value = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+    const base = Date.UTC(BASE_DATE.getFullYear(), BASE_DATE.getMonth(), BASE_DATE.getDate());
+    return Math.round((value - base) / 86400000);
+  }
+  let TODAY = offsetForDate(new Date());
+  function currentWeekIndex() { return Math.max(0, Math.min(11, Math.floor(TODAY / 7))); }
   const STORAGE_KEY = "pocket-training-v1";
   const TYPES = ["Fingers", "Board", "Bouldering", "Sport", "Trad", "Strength", "Cardio", "Mobility"];
   const TYPE_COLORS = {
@@ -93,7 +99,7 @@
   function dayOffset(iso) {
     if (!iso) return TODAY;
     const [year, month, date] = iso.split("-").map(Number);
-    return Math.round((new Date(year, month - 1, date) - BASE_DATE) / 86400000);
+    return offsetForDate(new Date(year, month - 1, date));
   }
   function shortDate(day) { return dayDate(day).toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
   function longDate(day) { return dayDate(day).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }); }
@@ -135,7 +141,7 @@
         { motivation: loadYesterday ? 7 : 8, sleep, fingers: loadYesterday ? 7 : 8 };
     }
     return {
-      page: "dashboard", sessions, workouts: cloneData(workoutSeeds), phases: INITIAL_PHASES.slice(), week: 6,
+      page: "dashboard", sessions, workouts: cloneData(workoutSeeds), phases: INITIAL_PHASES.slice(), week: currentWeekIndex(),
       profile: { name: "Avery Lane", weight: 70.1, bodyFat: 11.6, height: 173, homeCrag: "Red River Gorge", climbingYears: 8, preferredStyle: "Sport", gradeScale: "YDS", focus: "Redpoint 5.13a" },
       selectedWorkout: "w1", selectedGoal: "g1", selectedTest: "t1", workoutFilter: "All", workoutQuery: "",
       range: 28, checkins: checks, measurements: [
@@ -173,14 +179,99 @@
   } catch {
     state = seedState();
   }
+  state.week = currentWeekIndex();
   state.profile = {
     name: "Avery Lane", weight: 70.1, bodyFat: 11.6, height: 173, homeCrag: "Red River Gorge",
     climbingYears: 8, preferredStyle: "Sport", gradeScale: "YDS", focus: "Redpoint 5.13a",
     ...(state.profile || {})
   };
   function persist() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, data: state })); }
-    catch { toast("Could not save changes in this browser."); }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, data: state }));
+      return true;
+    } catch {
+      toast("Could not save changes in this browser.");
+      return false;
+    }
+  }
+  function downloadFile(filename, contents, type) {
+    const url = URL.createObjectURL(new Blob([contents], { type }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function toCsv(rows) {
+    return rows.map(row => row.map(value => {
+      const raw = String(value ?? "");
+      const text = typeof value === "string" && /^[\t\r\n ]*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+      return `"${text.replace(/"/g, '""')}"`;
+    }).join(",")).join("\r\n");
+  }
+  function validBackup(data) {
+    const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+    const string = value => typeof value === "string";
+    const number = value => typeof value === "number" && Number.isFinite(value);
+    const list = (value, check) => Array.isArray(value) && value.every(check);
+    const day = value => number(value) && value >= 0 && value < CYCLE_DAYS;
+    return object(data) && object(data.profile) && string(data.profile.name) && number(data.profile.weight) &&
+      (number(data.profile.bodyFat) || data.profile.bodyFat === null) &&
+      (number(data.profile.height) || data.profile.height === null) &&
+      (number(data.profile.climbingYears) || data.profile.climbingYears === null) &&
+      ["homeCrag", "preferredStyle", "gradeScale", "focus"].every(key => string(data.profile[key])) &&
+      list(data.sessions, item => object(item) && string(item.id) && day(item.day) &&
+        string(item.name) && string(item.type) && ["planned", "done", "skipped"].includes(item.status) &&
+        number(item.duration) && number(item.rpe) && number(item.plannedDuration) && number(item.plannedRpe) &&
+        string(item.location) && string(item.notes)) &&
+      list(data.workouts, item => object(item) && string(item.id) && string(item.name) &&
+        string(item.type) && number(item.dur) && number(item.rpe) && string(item.desc) &&
+        list(item.blocks, block => object(block) && ["name", "sets", "reps", "work", "rest", "load"].every(key => string(block[key])))) &&
+      list(data.phases, string) && data.phases.length === 12 &&
+      object(data.checkins) && Object.values(data.checkins).every(item => object(item) &&
+        number(item.motivation) && number(item.sleep) && number(item.fingers)) &&
+      list(data.measurements, item => object(item) && day(item.day) && number(item.weight) &&
+        (number(item.bodyFat) || item.bodyFat === null)) &&
+      list(data.tests, item => object(item) && string(item.id) && string(item.name) &&
+        string(item.category) && string(item.unit) && number(item.frequency) && string(item.direction) &&
+        string(item.equipment) && list(item.steps, string) &&
+        list(item.results, result => object(result) && day(result.day) && number(result.value) && string(result.note))) &&
+      list(data.goals, item => object(item) && string(item.id) && string(item.title) &&
+        string(item.category) && string(item.scale) && string(item.unit) && string(item.note) && string(item.testId) &&
+        number(item.start) && number(item.target) && number(item.current) && number(item.startDay) && number(item.deadline) &&
+        list(item.milestones, milestone => object(milestone) && string(milestone.text) && typeof milestone.done === "boolean"));
+  }
+  function dataPage() {
+    const sessionCount = state.sessions.length;
+    const completedCount = state.sessions.filter(item => item.status === "done").length;
+    const checkinCount = Object.keys(state.checkins).length;
+    const resultCount = state.tests.reduce((count, test) => count + test.results.length, 0);
+    return `${pageHeader("Your records · your browser", "Data", "See what the prototype collects, keep a copy, and take your training history with you.")}
+      <div class="data-grid">
+        <section class="card card-pad data-summary">
+          ${cardHead("Saved on this device", "Your training record")}
+          <p>This prototype automatically saves changes in this browser. It currently contains <strong>${sessionCount} sessions</strong> (${completedCount} completed), <strong>${checkinCount} check-ins</strong>, <strong>${state.measurements.length} body measurements</strong>, <strong>${state.workouts.length} workouts</strong>, and <strong>${resultCount} test results</strong>.</p>
+          <p class="footer-note">Records stay in this browser profile and are not encrypted or synced to an account. Clearing site data, changing browsers, or using another device will not move them.</p>
+          <div class="data-actions">
+            ${button("Download full backup · JSON", "export-json", "primary")}
+            ${button("Export training sessions · CSV", "export-sessions")}
+            ${button("Export wellness check-ins · CSV", "export-checkins")}
+            ${button("Export test results · CSV", "export-tests")}
+          </div>
+        </section>
+        <section class="card card-pad">
+          ${cardHead("Move or restore data", "Import a backup")}
+          <p>Restore a JSON backup made by Pocket Training. Import replaces the records currently saved in this browser.</p>
+          <input type="file" accept="application/json,.json" data-input="backup-file" hidden>
+          ${button("Choose backup file", "import-json", "small")}
+          <p class="footer-note" style="margin-top:13px">JSON includes your profile, plan, workouts, check-ins, measurements, goals, and test history. CSV exports are spreadsheet-friendly copies of individual logs.</p>
+        </section>
+        <section class="card card-pad">
+          ${cardHead("Grow beyond the prototype", "A sensible next step")}
+          <p>Start by logging real sessions, recovery check-ins, body measurements, and repeatable test results. The existing Metrics, Goals, and Tests screens already turn those records into trends.</p>
+          <p>When you need sign-in or sync across devices, move the same records to a backend database with a user ID and timestamps. Keep exports, limit collected personal data, and ask before sharing sensitive health or performance details.</p>
+        </section>
+      </div>`;
   }
   function profileInitials() {
     return state.profile.name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join("") || "CL";
@@ -191,6 +282,17 @@
     document.querySelectorAll("[data-profile-summary]").forEach(node => {
       node.textContent = `${state.profile.preferredStyle || "Climber"} · ${state.profile.weight} kg`;
     });
+    const cycleWeek = Math.floor(TODAY / 7);
+    const inCycle = cycleWeek >= 0 && cycleWeek < 12;
+    const visibleWeek = currentWeekIndex();
+    const cycleTitle = document.querySelector("[data-cycle-title]");
+    const cyclePhase = document.querySelector("[data-cycle-phase]");
+    const cyclePercent = document.querySelector("[data-cycle-percent]");
+    const cycleTrack = document.querySelector("[data-cycle-track]");
+    if (cycleTitle) cycleTitle.textContent = inCycle ? `Week ${cycleWeek + 1} of 12` : cycleWeek < 0 ? "Cycle not started" : "Cycle complete";
+    if (cyclePhase) cyclePhase.textContent = inCycle ? phaseFor(visibleWeek) + " phase" : cycleWeek < 0 ? "Upcoming" : "Complete";
+    if (cyclePercent) cyclePercent.textContent = `${Math.round(Math.max(0, Math.min(1, (TODAY + 1) / CYCLE_DAYS)) * 100)}%`;
+    if (cycleTrack) cycleTrack.style.width = `${Math.max(0, Math.min(1, (TODAY + 1) / CYCLE_DAYS)) * 100}%`;
   }
   function toast(message) {
     const node = document.getElementById("toast");
@@ -245,7 +347,7 @@
   function loadBars() {
     const stats = Array.from({ length: 12 }, (_, i) => loadStats(i));
     const max = Math.max(1, ...stats.map(x => Math.max(x.planned, x.done)));
-    return `<div class="load-chart">${stats.map((item, i) => `<div class="load-column ${i === 6 ? "current" : ""}" data-page="planner" data-week="${i}" title="Week ${i + 1}: ${fmt(item.done)} / ${fmt(item.planned)} AU">
+    return `<div class="load-chart">${stats.map((item, i) => `<div class="load-column ${i === currentWeekIndex() ? "current" : ""}" data-page="planner" data-week="${i}" title="Week ${i + 1}: ${fmt(item.done)} / ${fmt(item.planned)} AU">
       <div class="load-bars"><i class="load-bar done" style="height:${Math.max(2, item.done / max * 100)}%"></i><i class="load-bar" style="height:${Math.max(2, item.planned / max * 100)}%"></i></div><span>W${i + 1}</span></div>`).join("")}</div>`;
   }
   function miniGoal(goal) {
@@ -261,7 +363,7 @@
     const todays = current[0];
     const past = state.sessions.filter(x => x.day < TODAY || (x.day === TODAY && x.status !== "planned"));
     const complete = past.filter(x => x.status === "done").length;
-    const week = loadStats(6);
+    const week = loadStats(currentWeekIndex());
     const maxHang = state.tests.find(x => x.id === "t1")?.results.at(-1)?.value;
     const maxHangPercent = maxHang == null ? "—" : `${Math.round((state.profile.weight + maxHang) / state.profile.weight * 100)}%`;
     const readiness = state.checkins[TODAY] || { motivation: 8, sleep: 7.5, fingers: 7 };
@@ -275,20 +377,24 @@
       ["5.12d", 1], ["5.12c", 2], ["5.12b", 4], ["5.12a", 7], ["5.11d", 11], ["V7", 1], ["V6", 3]
     ];
     const peak = 11;
-    return `${pageHeader("Friday, October 2 · Fall send cycle", `Good morning, ${esc(state.profile.name.split(/\s+/)[0])}`, `Week 7 of 12 · ${esc(state.profile.homeCrag || "Your home crag")} · Power phase`,
+    const cycleWeek = Math.floor(TODAY / 7);
+    const currentWeek = Math.max(1, Math.min(12, cycleWeek + 1));
+    const cycleLabel = cycleWeek < 0 ? "Cycle not started" : cycleWeek >= 12 ? "Cycle complete" : `Week ${currentWeek} of 12`;
+    const currentPhase = phaseFor(currentWeekIndex());
+    return `${pageHeader(`${longDate(TODAY)} · Fall send cycle`, `Good morning, ${esc(state.profile.name.split(/\s+/)[0])}`, `${cycleLabel} · ${esc(state.profile.homeCrag || "Your home crag")} · ${currentPhase} phase`,
       `${button("↗ Log a test", "new-result", "")}${button('<span class="plus">+</span> Log session', "new-session", "primary")}`)}
       <div class="grid dashboard-grid">
         <section>
           <div class="card hero-card"><div class="hero-inner"><div>
-            <p class="card-kicker">The fall send cycle, week seven</p><h2 class="card-title">A little more power.<br>Then let it go outside.</h2>
+            <p class="card-kicker">The fall send cycle · week ${currentWeek}</p><h2 class="card-title">A little more power.<br>Then let it go outside.</h2>
             <p class="card-copy">${esc(state.profile.name)} · ${state.profile.climbingYears ? `${state.profile.climbingYears} years climbing · ` : ""}${esc(state.profile.homeCrag || "Building a home crag")}</p>
-          </div><div class="hero-session"><p class="card-kicker">Today's session · Power phase</p>
+          </div><div class="hero-session"><p class="card-kicker">Today's session · ${currentPhase} phase</p>
             <p class="hero-session-name">${todays ? esc(todays.name) : "A recovery day"}</p>
             <p class="hero-session-meta">${todays ? sessionMeta(todays) : "Nothing on the calendar today."}</p>
             ${todays ? button("Mark done", `complete-session`, "small", `data-id="${todays.id}"`) : button("Plan a session", "new-session", "small")}
           </div></div></div>
           <div class="card card-pad">
-            <div class="card-head"><div><p class="card-kicker">Cycle progress</p><h2 class="card-title">Training, with a little intention.</h2></div><span class="status-badge">Wk 7 / 12</span></div>
+            <div class="card-head"><div><p class="card-kicker">Cycle progress</p><h2 class="card-title">Training, with a little intention.</h2></div><span class="status-badge">Wk ${currentWeek} / 12</span></div>
             <div class="stat-row">
               ${metricStat("This week", `${fmt(week.done)}`, `of ${fmt(week.planned)} AU planned`, "metrics")}
               ${metricStat("Adherence", `${Math.round(complete / Math.max(1, past.length) * 100)}%`, `${complete} of ${past.length} sessions`, "planner")}
@@ -304,7 +410,7 @@
             ${cardHead("Readiness · checked in 7:12 am", "Today's green light", button("Edit", "checkin", "quiet small"))}
             <div class="readiness-top"><div class="readiness-score"><strong>${readiness.motivation}</strong><span>/ 10 motivation</span></div><span class="status-badge ${readyBad ? "rust" : readyGood ? "" : "gold"}">${readyBad ? "Take it easy" : readyGood ? "Ready to train" : "Build into it"}</span></div>
             <p class="readiness-note">${readyNote}</p>
-            <div class="readiness-tiles"><div><span>Sleep</span><strong>${readiness.sleep} h</strong></div><div><span>Finger feel</span><strong>${readiness.fingers}/10</strong></div><div><span>Cycle week</span><strong>07 / 12</strong></div></div>
+            <div class="readiness-tiles"><div><span>Sleep</span><strong>${readiness.sleep} h</strong></div><div><span>Finger feel</span><strong>${readiness.fingers}/10</strong></div><div><span>Cycle week</span><strong>${String(currentWeek).padStart(2, "0")} / 12</strong></div></div>
           </div>
           <div class="card card-pad">
             ${cardHead("Training load", "Completed vs. planned", `<div class="legend"><span><i></i>Done</span><span><i class="planned"></i>Plan</span></div>`)}
@@ -330,7 +436,7 @@
     weekSessions.filter(x => x.status !== "skipped").forEach(x => minutes[x.type] = (minutes[x.type] || 0) + x.duration);
     const maxMinutes = Math.max(1, ...Object.values(minutes));
     const days = Array.from({ length: 7 }, (_, index) => week * 7 + index);
-    return `${pageHeader("Fall send cycle · Aug 17 – Nov 8 · 12 weeks", "Planner", "A plan is a hypothesis. Adjust it to the climber in front of you.",
+    return `${pageHeader(`Fall send cycle · ${shortDate(0)} – ${shortDate(CYCLE_DAYS - 1)} · 12 weeks`, "Planner", "A plan is a hypothesis. Adjust it to the climber in front of you.",
       `      ${button("This week", "this-week", "")}${button('<span class="plus">+</span> Add session', "new-session", "primary", `data-day="${Math.max(TODAY, state.week * 7)}"`)}`)}
       <div class="planner-week-strip">${Array.from({ length: 12 }, (_, index) => {
         const item = loadStats(index);
@@ -454,7 +560,7 @@
           <div class="heatmap">${Array.from({ length: 84 }, (_, d) => {
             const session = state.sessions.find(x => x.day === d && x.status === "done");
             return `<i class="heat-cell ${session ? (session.duration * session.rpe > 400 ? "active" : "medium") : ""}" title="${longDate(d)}${session ? ` · ${session.duration * session.rpe} AU` : ""}"></i>`;
-          }).join("")}</div><div class="chart-labels" style="margin-top:7px"><span>Aug 17</span><span>Less</span><span>More</span><span>Nov 8</span></div>
+          }).join("")}</div>          <div class="chart-labels" style="margin-top:7px"><span>${shortDate(0)}</span><span>Less</span><span>More</span><span>${shortDate(CYCLE_DAYS - 1)}</span></div>
           <div class="stat-row" style="margin-top:10px"><div class="stat"><div class="stat-label">Current streak</div><div class="stat-value">3 wk</div><div class="stat-sub">≥ 80% adherence</div></div><div class="stat"><div class="stat-label">Best streak</div><div class="stat-value">5 wk</div><div class="stat-sub">this cycle</div></div></div>
         </div>
         <div class="card card-pad">${cardHead("Finger strength", "Max hang · 20 mm", `<button class="text-link" data-page="tests">Open test →</button>`)}
@@ -544,7 +650,7 @@
   }
   function render() {
     const root = document.getElementById("app");
-    root.innerHTML = ({ dashboard, planner, workouts, metrics, goals, tests }[state.page] || dashboard)();
+    root.innerHTML = ({ dashboard, planner, workouts, metrics, goals, tests, data: dataPage }[state.page] || dashboard)();
     document.querySelectorAll(".nav-item").forEach(node => node.classList.toggle("active", node.dataset.page === state.page));
     document.querySelectorAll(".mobile-nav [data-page]").forEach(node => node.classList.toggle("active", node.dataset.page === state.page));
     updateProfileUI();
@@ -619,7 +725,7 @@
       ${field("Finger feel · 1–10", "fingers", values.fingers, "number", "min='1' max='10' step='1' required")}
       <p class="field-help">A quick check-in gives context to your training log. It isn't a readiness prescription.</p>
     </div>`;
-    openModal("Morning check-in", content, "Save check-in", { form: "checkin", kicker: "Friday, October 2" });
+    openModal("Morning check-in", content, "Save check-in", { form: "checkin", kicker: longDate(TODAY) });
   }
   function workoutModal(workout = null) {
     const data = workout || { name: "", type: "Strength", duration: 45, rpe: 6, desc: "" };
@@ -819,10 +925,42 @@
       state.week = Math.max(0, Math.min(11, state.week + (action === "prev-week" ? -1 : 1)));
       persist(); render();
     }
-    else if (action === "this-week") { state.week = Math.floor(TODAY / 7); persist(); render(); }
+    else if (action === "this-week") { state.week = currentWeekIndex(); persist(); render(); }
     else if (action === "apply-template") { applyTemplate(); }
     else if (action === "profile") profilePopover();
     else if (action === "close-profile") closeModal();
+    else if (action === "export-json") {
+      downloadFile("pocket-training-backup.json", JSON.stringify({
+        version: 1, exportedAt: new Date().toISOString(), data: state
+      }, null, 2), "application/json");
+      toast("Full backup downloaded.");
+    }
+    else if (action === "export-sessions") {
+      const rows = [["id", "date", "workout", "type", "status", "planned_duration_min", "planned_rpe", "duration_min", "rpe", "load_au", "location", "notes"]];
+      state.sessions.slice().sort((a, b) => a.day - b.day).forEach(item => rows.push([
+        item.id, dayISO(item.day), item.name, item.type, item.status, item.plannedDuration, item.plannedRpe,
+        item.duration, item.rpe, item.status === "done" ? item.duration * item.rpe : "", item.location, item.notes
+      ]));
+      downloadFile("pocket-training-sessions.csv", toCsv(rows), "text/csv;charset=utf-8");
+      toast("Session log downloaded.");
+    }
+    else if (action === "export-checkins") {
+      const rows = [["date", "motivation", "sleep_hours", "finger_feel"]];
+      Object.entries(state.checkins).sort(([a], [b]) => Number(a) - Number(b)).forEach(([offset, checkin]) =>
+        rows.push([dayISO(Number(offset)), checkin.motivation, checkin.sleep, checkin.fingers])
+      );
+      downloadFile("pocket-training-checkins.csv", toCsv(rows), "text/csv;charset=utf-8");
+      toast("Wellness log downloaded.");
+    }
+    else if (action === "export-tests") {
+      const rows = [["test_id", "protocol", "category", "date", "value", "unit", "note"]];
+      state.tests.forEach(test => test.results.forEach(result =>
+        rows.push([test.id, test.name, test.category, dayISO(result.day), result.value, test.unit, result.note])
+      ));
+      downloadFile("pocket-training-test-results.csv", toCsv(rows), "text/csv;charset=utf-8");
+      toast("Test results downloaded.");
+    }
+    else if (action === "import-json") document.querySelector("[data-input='backup-file']")?.click();
   });
 
   function applyTemplate() {
@@ -846,6 +984,32 @@
 
   document.addEventListener("change", event => {
     const target = event.target;
+    if (target.matches("[data-input='backup-file']")) {
+      const file = target.files?.[0];
+      if (!file) return;
+      (async () => {
+        let contents;
+        try { contents = await file.text(); }
+        catch { toast("Could not read that backup file."); return; }
+        let backup;
+        try { backup = JSON.parse(contents); }
+        catch { toast("That file is not valid JSON."); return; }
+        if (backup?.version !== 1 || !validBackup(backup.data)) {
+          toast("That file is not a compatible Pocket Training backup.");
+          return;
+        }
+        if (!window.confirm("Import this backup and replace the data saved in this browser?")) return;
+        state = cloneData(backup.data);
+        state.page = "data";
+        const saved = persist();
+        render();
+        toast(saved ? "Backup imported and saved in this browser." : "Backup loaded for this visit, but browser storage failed.");
+      })().catch(error => {
+        console.error("Backup import failed.", error);
+        toast("An unexpected error prevented the backup from being restored.");
+      }).finally(() => { target.value = ""; });
+      return;
+    }
     if (target.matches("[data-change='phase']")) {
       state.phases[state.week] = target.value;
       persist(); render();
@@ -1036,5 +1200,24 @@
     if (event.key === "Escape" && document.querySelector(".profile-popover")) closeModal();
   });
 
+  function refreshToday() {
+    const previousWeek = currentWeekIndex();
+    const nextToday = offsetForDate(new Date());
+    if (nextToday === TODAY) return;
+    TODAY = nextToday;
+    if (state.page === "planner" && state.week === previousWeek) state.week = currentWeekIndex();
+    render();
+  }
+  function scheduleTodayRefresh() {
+    const nextMidnight = new Date();
+    nextMidnight.setHours(24, 0, 0, 50);
+    setTimeout(() => {
+      refreshToday();
+      scheduleTodayRefresh();
+    }, Math.max(1000, nextMidnight.getTime() - Date.now()));
+  }
+  document.addEventListener("visibilitychange", refreshToday);
+  window.addEventListener("focus", refreshToday);
   render();
+  scheduleTodayRefresh();
 })();
