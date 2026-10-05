@@ -136,6 +136,7 @@
     }
     return {
       page: "dashboard", sessions, workouts: cloneData(workoutSeeds), phases: INITIAL_PHASES.slice(), week: 6,
+      profile: { name: "Avery Lane", weight: 70.1, bodyFat: 11.6, height: 173, homeCrag: "Red River Gorge", climbingYears: 8, preferredStyle: "Sport", gradeScale: "YDS", focus: "Redpoint 5.13a" },
       selectedWorkout: "w1", selectedGoal: "g1", selectedTest: "t1", workoutFilter: "All", workoutQuery: "",
       range: 28, checkins: checks, measurements: [
         { day: 0, weight: 72.4, bodyFat: 13.8 }, { day: 14, weight: 71.8, bodyFat: 13.3 },
@@ -172,9 +173,24 @@
   } catch {
     state = seedState();
   }
+  state.profile = {
+    name: "Avery Lane", weight: 70.1, bodyFat: 11.6, height: 173, homeCrag: "Red River Gorge",
+    climbingYears: 8, preferredStyle: "Sport", gradeScale: "YDS", focus: "Redpoint 5.13a",
+    ...(state.profile || {})
+  };
   function persist() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, data: state })); }
     catch { toast("Could not save changes in this browser."); }
+  }
+  function profileInitials() {
+    return state.profile.name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0].toUpperCase()).join("") || "CL";
+  }
+  function updateProfileUI() {
+    document.querySelectorAll("[data-profile-avatar]").forEach(node => { node.textContent = profileInitials(); });
+    document.querySelectorAll("[data-profile-name]").forEach(node => { node.textContent = state.profile.name; });
+    document.querySelectorAll("[data-profile-summary]").forEach(node => {
+      node.textContent = `${state.profile.preferredStyle || "Climber"} · ${state.profile.weight} kg`;
+    });
   }
   function toast(message) {
     const node = document.getElementById("toast");
@@ -246,6 +262,8 @@
     const past = state.sessions.filter(x => x.day < TODAY || (x.day === TODAY && x.status !== "planned"));
     const complete = past.filter(x => x.status === "done").length;
     const week = loadStats(6);
+    const maxHang = state.tests.find(x => x.id === "t1")?.results.at(-1)?.value;
+    const maxHangPercent = maxHang == null ? "—" : `${Math.round((state.profile.weight + maxHang) / state.profile.weight * 100)}%`;
     const readiness = state.checkins[TODAY] || { motivation: 8, sleep: 7.5, fingers: 7 };
     const readyGood = readiness.fingers >= 7 && readiness.sleep >= 7 && readiness.motivation >= 6;
     const readyBad = readiness.fingers <= 5 || readiness.sleep < 6;
@@ -257,13 +275,13 @@
       ["5.12d", 1], ["5.12c", 2], ["5.12b", 4], ["5.12a", 7], ["5.11d", 11], ["V7", 1], ["V6", 3]
     ];
     const peak = 11;
-    return `${pageHeader("Friday, October 2 · Fall send cycle", "Good morning, Avery", "Week 7 of 12 · Red River Gorge · Power phase",
+    return `${pageHeader("Friday, October 2 · Fall send cycle", `Good morning, ${esc(state.profile.name.split(/\s+/)[0])}`, `Week 7 of 12 · ${esc(state.profile.homeCrag || "Your home crag")} · Power phase`,
       `${button("↗ Log a test", "new-result", "")}${button('<span class="plus">+</span> Log session', "new-session", "primary")}`)}
       <div class="grid dashboard-grid">
         <section>
           <div class="card hero-card"><div class="hero-inner"><div>
             <p class="card-kicker">The fall send cycle, week seven</p><h2 class="card-title">A little more power.<br>Then let it go outside.</h2>
-            <p class="card-copy">Avery Lane · Self-coached · Red River Gorge</p>
+            <p class="card-copy">${esc(state.profile.name)} · ${state.profile.climbingYears ? `${state.profile.climbingYears} years climbing · ` : ""}${esc(state.profile.homeCrag || "Building a home crag")}</p>
           </div><div class="hero-session"><p class="card-kicker">Today's session · Power phase</p>
             <p class="hero-session-name">${todays ? esc(todays.name) : "A recovery day"}</p>
             <p class="hero-session-meta">${todays ? sessionMeta(todays) : "Nothing on the calendar today."}</p>
@@ -274,7 +292,7 @@
             <div class="stat-row">
               ${metricStat("This week", `${fmt(week.done)}`, `of ${fmt(week.planned)} AU planned`, "metrics")}
               ${metricStat("Adherence", `${Math.round(complete / Math.max(1, past.length) * 100)}%`, `${complete} of ${past.length} sessions`, "planner")}
-              ${metricStat("Max hang · 20 mm", "+18 kg", "129% bodyweight", "tests")}
+              ${metricStat("Max hang · 20 mm", maxHang == null ? "—" : `+${maxHang} kg`, `${maxHangPercent} bodyweight`, "tests")}
               ${metricStat("Outdoor days", "44", "of 60 for 2026", "goals")}
             </div>
           </div>
@@ -422,7 +440,7 @@
     const avg = key => checkDays.length ? (checkDays.reduce((sum, day) => sum + state.checkins[day][key], 0) / checkDays.length).toFixed(1) : "—";
     const recentWeeks = weeklyLoad.slice(0, 9);
     const body = state.measurements.slice().sort((a, b) => a.day - b.day);
-    const latestBody = body[body.length - 1] || { weight: 70.1, bodyFat: 11.6 };
+    const latestBody = body[body.length - 1] || { weight: state.profile.weight, bodyFat: state.profile.bodyFat };
     const latestHang = state.tests.find(x => x.id === "t1")?.results.at(-1);
     return `${pageHeader("Load · strength · body · wellness", "Metrics", "The patterns behind the projects — training, recovery, and the human bits.",
       `<div class="segmented">${[[14, "14 days"], [28, "28 days"], [47, "Cycle"]].map(([n, label]) => `<button class="segment ${state.range === n ? "active" : ""}" data-range="${n}">${label}</button>`).join("")}</div>`)}
@@ -441,7 +459,7 @@
         </div>
         <div class="card card-pad">${cardHead("Finger strength", "Max hang · 20 mm", `<button class="text-link" data-page="tests">Open test →</button>`)}
           ${lineChart(state.tests.find(x => x.id === "t1")?.results.map(x => x.value) || [])}<div class="chart-labels"><span>Aug</span><span>Sep</span><span>Oct</span></div>
-          <div class="goal-stat-grid"><div class="mini-stat"><small>Max hang</small><strong>+${latestHang?.value ?? "—"} kg</strong></div><div class="mini-stat"><small>Bodyweight</small><strong>129%</strong></div><div class="mini-stat"><small>Repeaters</small><strong>${state.tests.find(x => x.id === "t3")?.results.at(-1)?.value ?? "—"} reps</strong></div></div>
+          <div class="goal-stat-grid"><div class="mini-stat"><small>Max hang</small><strong>${latestHang ? `+${latestHang.value} kg` : "—"}</strong></div><div class="mini-stat"><small>Bodyweight</small><strong>${latestHang ? `${Math.round((state.profile.weight + latestHang.value) / state.profile.weight * 100)}%` : "—"}</strong></div><div class="mini-stat"><small>Repeaters</small><strong>${state.tests.find(x => x.id === "t3")?.results.at(-1)?.value ?? "—"} reps</strong></div></div>
         </div>
       </section><section class="grid" style="align-content:start">
         <div class="card card-pad">${cardHead("Body composition", "Measure what matters")}
@@ -529,6 +547,7 @@
     root.innerHTML = ({ dashboard, planner, workouts, metrics, goals, tests }[state.page] || dashboard)();
     document.querySelectorAll(".nav-item").forEach(node => node.classList.toggle("active", node.dataset.page === state.page));
     document.querySelectorAll(".mobile-nav [data-page]").forEach(node => node.classList.toggle("active", node.dataset.page === state.page));
+    updateProfileUI();
   }
   function setPage(page) {
     state.page = page;
@@ -547,6 +566,28 @@
     if (first) first.focus();
   }
   function closeModal() { document.getElementById("modal-root").innerHTML = ""; }
+  function profilePopover() {
+    const profile = state.profile;
+    const root = document.getElementById("modal-root");
+    root.innerHTML = `<section class="profile-popover" role="dialog" aria-modal="false" aria-labelledby="profile-title">
+      <div class="profile-popover-head"><div><p class="card-kicker">About you</p><h2 id="profile-title">Climber profile</h2></div><button type="button" class="icon-button" data-action="close-profile" aria-label="Close profile">×</button></div>
+      <form data-form="profile"><div class="profile-popover-body">
+        <label class="field-label full">Name<input class="field" name="name" value="${esc(profile.name)}" autocomplete="name" required maxlength="70"></label>
+        <div class="profile-fields">
+          <label class="field-label">Body weight <span class="field-hint">Used for strength ratios</span><span class="input-with-unit"><input class="field" name="weight" type="number" min="30" max="250" step=".1" value="${profile.weight}" required><span>kg</span></span></label>
+          <label class="field-label">Body fat <span class="field-hint">Optional</span><span class="input-with-unit"><input class="field" name="bodyFat" type="number" min="1" max="60" step=".1" value="${profile.bodyFat ?? ""}" placeholder="—"><span>%</span></span></label>
+          <label class="field-label">Height <span class="field-hint">Optional</span><span class="input-with-unit"><input class="field" name="height" type="number" min="100" max="240" step="1" value="${profile.height ?? ""}" placeholder="—"><span>cm</span></span></label>
+          <label class="field-label">Years climbing<input class="field" name="climbingYears" type="number" min="0" max="100" step=".5" value="${profile.climbingYears ?? ""}"></label>
+          <label class="field-label">Home crag<input class="field" name="homeCrag" value="${esc(profile.homeCrag)}" placeholder="Where you climb most"></label>
+          <label class="field-label">Favorite style<select class="select" name="preferredStyle">${["Sport", "Bouldering", "Trad", "Board", "All-around"].map(style => `<option ${profile.preferredStyle === style ? "selected" : ""}>${style}</option>`).join("")}</select></label>
+          <label class="field-label">Preferred grade scale<select class="select" name="gradeScale"><option ${profile.gradeScale === "YDS" ? "selected" : ""}>YDS</option><option ${profile.gradeScale === "V" ? "selected" : ""}>V</option></select></label>
+          <label class="field-label">Current focus<input class="field" name="focus" value="${esc(profile.focus)}" placeholder="A route, skill, or goal"></label>
+        </div>
+        <p class="profile-privacy-note">Your profile stays in this browser. Body weight updates your body-composition record and strength-to-weight metrics.</p>
+      </div><div class="profile-popover-foot"><button type="button" class="button small" data-action="close-profile">Cancel</button><button class="button primary small" type="submit">Save profile</button></div></form>
+    </section>`;
+    root.querySelector("input[name='name']")?.focus();
+  }
   function field(label, name, value = "", type = "text", attrs = "") {
     return `<label class="field-label">${label}<input class="field" name="${name}" type="${type}" value="${esc(value)}" ${attrs}></label>`;
   }
@@ -599,7 +640,7 @@
   }
   function goalModal(goal = null) {
     const editing = !!goal?.id;
-    const data = goal || { title: "", category: "Strength", scale: "YDS", start: 0, target: 10, current: 0, unit: "kg", deadline: TODAY + 90, note: "", testId: "" };
+    const data = goal || { title: "", category: "Strength", scale: state.profile.gradeScale || "YDS", start: 0, target: 10, current: 0, unit: "kg", deadline: TODAY + 90, note: "", testId: "" };
     const isGrade = data.category === "Grade";
     const grades = data.scale === "V" ? V_GRADES : YDS;
     const content = `<div class="form-grid">
@@ -780,7 +821,8 @@
     }
     else if (action === "this-week") { state.week = Math.floor(TODAY / 7); persist(); render(); }
     else if (action === "apply-template") { applyTemplate(); }
-    else if (action === "profile") toast("Avery Lane · Self-coached climber · 70.1 kg");
+    else if (action === "profile") profilePopover();
+    else if (action === "close-profile") closeModal();
   });
 
   function applyTemplate() {
@@ -824,8 +866,9 @@
       const old = Object.fromEntries(new FormData(form));
       const category = target.name === "category" ? target.value : old.category;
       const oldScale = old.scale || "YDS";
-      const scale = target.name === "scale" ? target.value : oldScale;
       const wasGrade = old.originalCategory === "Grade";
+      const scale = target.name === "scale" ? target.value :
+        (category === "Grade" && !wasGrade ? state.profile.gradeScale : oldScale);
       const isGrade = category === "Grade";
       const gradeIndex = wasGrade ? (oldScale === "V" ? V_GRADES : YDS).indexOf(old.start) : -1;
       const nextGoal = {
@@ -885,6 +928,36 @@
       };
       if (session) Object.assign(session, next); else state.sessions.push(next);
       persist(); closeModal(); render(); toast(session ? "Session updated." : "Session added to your plan.");
+    } else if (type === "profile") {
+      const name = String(data.get("name") || "").trim();
+      const weight = Number(data.get("weight"));
+      const rawBodyFat = String(data.get("bodyFat") || "").trim();
+      const rawHeight = String(data.get("height") || "").trim();
+      const rawYears = String(data.get("climbingYears") || "").trim();
+      const bodyFat = rawBodyFat ? Number(rawBodyFat) : null;
+      const height = rawHeight ? Number(rawHeight) : null;
+      const climbingYears = rawYears ? Number(rawYears) : null;
+      if (!name || !Number.isFinite(weight) || weight < 30 || weight > 250 ||
+          (bodyFat !== null && (!Number.isFinite(bodyFat) || bodyFat < 1 || bodyFat > 60)) ||
+          (height !== null && (!Number.isFinite(height) || height < 100 || height > 240)) ||
+          (climbingYears !== null && (!Number.isFinite(climbingYears) || climbingYears < 0 || climbingYears > 100))) {
+        toast("Check the profile details and enter valid measurements."); return;
+      }
+      state.profile = {
+        ...state.profile, name, weight, bodyFat, height, climbingYears,
+        homeCrag: String(data.get("homeCrag") || "").trim(),
+        preferredStyle: String(data.get("preferredStyle") || "Sport"),
+        gradeScale: String(data.get("gradeScale") || "YDS"),
+        focus: String(data.get("focus") || "").trim()
+      };
+      const todayMeasurement = state.measurements.find(x => x.day === TODAY);
+      if (todayMeasurement) {
+        todayMeasurement.weight = weight;
+        if (bodyFat !== null) todayMeasurement.bodyFat = bodyFat;
+      } else {
+        state.measurements.push({ day: TODAY, weight, bodyFat: bodyFat ?? state.measurements.at(-1)?.bodyFat ?? null });
+      }
+      persist(); closeModal(); render(); toast("Your profile is saved.");
     } else if (type === "checkin") {
       state.checkins[TODAY] = { motivation: Number(data.get("motivation")), sleep: Number(data.get("sleep")), fingers: Number(data.get("fingers")) };
       persist(); closeModal(); render(); toast("Check-in saved.");
@@ -955,7 +1028,12 @@
   });
 
   document.addEventListener("click", event => {
+    if (document.querySelector(".profile-popover") && !event.target.closest(".profile-popover") &&
+        !event.target.closest("[data-action='profile']")) closeModal();
     if (event.target.matches(".modal-backdrop") && event.target.dataset.action === "backdrop") closeModal();
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && document.querySelector(".profile-popover")) closeModal();
   });
 
   render();
